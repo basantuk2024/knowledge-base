@@ -1,0 +1,249 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template to create app-AST-S3-LANDING IAM role with same policies as app-AST-S3-ADMIN'
+
+Parameters:
+  AccountId:
+    Type: String
+    Description: AWS Account ID
+    Default: '124930443440'
+  
+  OIDCProviderArn:
+    Type: String
+    Description: ARN of the OIDC Provider for EKS cluster
+    Default: 'arn:aws:iam::124930443440:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/CD2E2C37BED785E0F4FF87A4A98FAD3'
+  
+  ServiceAccountName:
+    Type: String
+    Description: Kubernetes service account name
+    Default: 'astronomer-*'
+
+Resources:
+  AppASTLandingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: app-AST-S3-LANDING
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Allow AssumeRole for cross-account access
+          - Effect: Allow
+            Principal:
+              AWS: 
+                - !Sub 'arn:aws:iam::05944873478:user/FederationUser'
+                - !Sub 'arn:aws:iam::778914484860:role/federation-role'
+                - !Sub 'arn:aws:iam::524505257659:role/federation-role'
+            Action: 'sts:AssumeRole'
+          
+          # Allow AssumeRoleWithWebIdentity for OIDC/EKS
+          - Effect: Allow
+            Principal:
+              Federated: !Ref OIDCProviderArn
+            Action: 'sts:AssumeRoleWithWebIdentity'
+            Condition:
+              StringLike:
+                'oidc.eks.eu-west-1.amazonaws.com/id/CD2E2C37BED785E0F4FF87A4A98FAD3:sub': !Sub 'system:serviceaccount:${ServiceAccountName}'
+          
+          # Allow specific user access
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::124930443440:user/bn4e0000-s'
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'sts:ExternalId': 'IN01900_SFCRole=2_xu4AoFBrinmy761Gm/8XkP83I7A='
+          
+          # Allow service principals
+          - Effect: Allow
+            Principal:
+              Service:
+                - lakeformation.amazonaws.com
+                - glue.amazonaws.com
+                - rds.amazonaws.com
+                - elasticmapreduce.amazonaws.com
+            Action: 'sts:AssumeRole'
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonRDSDataFullAccess
+        - arn:aws:iam::aws:policy/AmazonRDSFullAccess
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+        - arn:aws:iam::aws:policy/AmazonDynamoDBReadOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+
+      Tags:
+        - Key: 'CORE-ROLE-OWNER'
+          Value: 'Application'
+        - Key: 'CORE-ROLE-PRIVILEGE'
+          Value: 'High'
+        - Key: 'portfolio-owner'
+          Value: 'application'
+
+  # Inline Policy for Secrets Manager permissions
+  ChangeSecretsPolicyInline:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ChangeSecretsPolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:CreateSecret
+              - secretsmanager:UpdateSecret
+              - secretsmanager:DeleteSecret
+              - secretsmanager:RestoreSecret
+              - secretsmanager:RotateSecret
+              - secretsmanager:UpdateSecretVersionStage
+              - secretsmanager:EnableKeyRotation
+              - secretsmanager:DisableKeyRotation
+              - secretsmanager:TagResource
+              - secretsmanager:UntagResource
+              - secretsmanager:UpdateSecretVersionStage
+              - secretsmanager:PutResourcePolicy
+              - secretsmanager:DeleteResourcePolicy
+            Resource:
+              - !Sub 'arn:aws:secretsmanager:eu-west-1:${AccountId}:secret:/app/astronomer/dev/spoke/*'
+              - !Sub 'arn:aws:secretsmanager:eu-west-1:${AccountId}:secret:/app/astronomer/dev/hub/*'
+              - !Sub 'arn:aws:secretsmanager:eu-west-1:${AccountId}:secret:/app/astronomer/dev/*'
+              - !Sub 'arn:aws:secretsmanager:eu-west-1:${AccountId}:secret:/app/astronomer/int/spoke/*'
+              - !Sub 'arn:aws:secretsmanager:eu-west-1:${AccountId}:secret:/app/astronomer/int/hub/*'
+              - !Sub 'arn:aws:secretsmanager:eu-west-1:${AccountId}:secret:/app/astronomer/int/*'
+          - Effect: Allow
+      Roles:
+        - !Ref AppASTLandingRole
+
+  # Inline Policy for DynamoDB permissions
+  DynamoDBTfStateEditPolicyInline:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: DynamoDBTfStateEditPolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:BatchWriteItem
+              - dynamodb:ConditionCheckItem
+              - dynamodb:CreateBackup
+              - dynamodb:CreateTable
+              - dynamodb:DeleteBackup
+              - dynamodb:DeleteItem
+              - dynamodb:DeleteTable
+              - dynamodb:PutItem
+              - dynamodb:RestoreTableFromBackup
+              - dynamodb:RestoreTableToPointInTime
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+              - dynamodb:UpdateContinuousBackups
+              - dynamodb:UpdateContributorInsights
+              - dynamodb:UpdateGlobalTable
+              - dynamodb:UpdateGlobalTableSettings
+              - dynamodb:UpdateItem
+              - dynamodb:UpdateTable
+              - dynamodb:UpdateTableReplicaAutoScaling
+              - dynamodb:UpdateTimeToLive
+            Resource:
+              - !Sub 'arn:aws:dynamodb:eu-west-1:${AccountId}:table/astronomer-barclays-eu-tfstate-dev'
+              - !Sub 'arn:aws:dynamodb:eu-west-1:${AccountId}:table/astronomer-barclays-eu-tfstate-dev/*'
+              - !Sub 'arn:aws:dynamodb:eu-west-1:${AccountId}:table/astronomer-barclays-eu-tfstate-int'
+              - !Sub 'arn:aws:dynamodb:eu-west-1:${AccountId}:table/astronomer-barclays-eu-tfstate-int/*'
+          - Effect: Allow
+      Roles:
+        - !Ref AppASTLandingRole
+
+  # Inline Policy for KMS permissions
+  KMSAccessPolicyInline:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: KMSAccessPolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey
+              - kms:CreateGrant
+              - kms:RevokeGrant
+              - kms:PutKeyPolicy
+              - kms:Put*
+              - kms:List*
+              - kms:Describe*
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:Create*
+              - kms:Enable*
+              - kms:CreateAlias
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+            Resource: '*'
+          - Effect: Allow
+      Roles:
+        - !Ref AppASTLandingRole
+
+  # Inline Policy for S3 Terraform State permissions
+  S3BucketTfStateEditPolicyInline:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: S3BucketTfStateEditPolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:PutBucketAcl
+              - s3:PutBucketCors
+              - s3:DeleteBucketCors
+              - s3:PutBucketLogging
+              - s3:PutBucketTagging
+              - s3:DeleteBucketTagging
+              - s3:PutBucketVersioning
+              - s3:PutBucketWebsite
+              - s3:DeleteBucketWebsite
+              - s3:PutBucketNotification
+              - s3:PutBucketLifecycle
+              - s3:DeleteBucketLifecycle
+              - s3:PutBucketReplication
+              - s3:DeleteBucketReplication
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+              - s3:PutObjectAcl
+              - s3:DeleteObjectVersion
+              - s3:PutObjectVersionAcl
+              - s3:RestoreObject
+              - s3:PutObjectTagging
+              - s3:DeleteObjectTagging
+              - s3:PutObjectVersionTagging
+              - s3:PutObjectVersionTagging
+            Resource:
+              - !Sub 'arn:aws:s3:::${AccountId}-eu-west-1-tf-state-bucket-astronomer-dev'
+              - !Sub 'arn:aws:s3:::${AccountId}-eu-west-1-tf-state-bucket-astronomer-dev/*'
+              - !Sub 'arn:aws:s3:::${AccountId}-eu-west-1-tf-state-bucket-astronomer-int'
+              - !Sub 'arn:aws:s3:::${AccountId}-eu-west-1-tf-state-bucket-astronomer-int/*'
+          - Effect: Allow
+      Roles:
+        - !Ref AppASTLandingRole
+
+Outputs:
+  RoleArn:
+    Description: 'ARN of the created IAM role'
+    Value: !GetAtt AppASTLandingRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RoleArn'
+  
+  RoleName:
+    Description: 'Name of the created IAM role'
+    Value: !Ref AppASTLandingRole
+    Export:
+      Name: !Sub '${AWS::StackName}-RoleName'
