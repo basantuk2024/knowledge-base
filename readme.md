@@ -25,5 +25,11 @@ resource "aws_servicecatalog_provisioned_product" "example" {
       value = provisioning_parameters.value
     }
   }
+
+ # Add static required parameter directly
+  provisioning_parameters {
+    key   = "TempDir"
+    value = "/tmp/glue-job"
+  }
 }
 
