@@ -1,0 +1,47 @@
+# metadata.yaml
+# AWS Service Catalog metadata file for CrossAccountAssumeRole product
+
+Name: crossaccountassumerole
+Owner: Platform Engineering Team
+Description: >
+  AWS Service Catalog Product to configure secure cross-account IAM roles 
+  between an EKS cluster (Account A) and S3 resources (Account B), 
+  supporting both IRSA and AWS Pod Identity for Airflow and data platform workloads.
+
+Distributor: Internal Platform
+SupportDescription: >
+  Contact the Platform Engineering team via Slack (#aws-platform) 
+  or raise a ServiceNow request under "AWS Account Access".
+
+# Optional - Add tags for governance / cost tracking
+Tags:
+  - Key: ProductType
+    Value: IAM
+  - Key: Service
+    Value: CrossAccountAccess
+  - Key: Owner
+    Value: PlatformTeam
+  - Key: Environment
+    Value: MultiEnv
+
+# Product versions definition
+ProvisioningArtifacts:
+  - Name: v1.0.0
+    Description: >
+      Initial version of cross-account assume role product 
+      with IAM RoleA (EKS) and RoleB (S3) setup, supporting Pod Identity (1.28+).
+    Info:
+      LoadTemplateFromURL: https://s3.amazonaws.com/YOUR-SC-BUCKET/templates/crossaccountassumerole/product.yaml
+    Type: CLOUD_FORMATION_TEMPLATE
+    Guidance: DEFAULT
+    Active: true
+
+# Optional - constraints and governance
+LaunchPaths:
+  - Name: StandardPortfolio
+    PortfolioId: port-xxxxxxxxxxxxxxxxx   # <-- Replace with your Service Catalog Portfolio ID
+    Constraints:
+      - Type: LAUNCH
+        Description: >
+          Restricts product launch to specific IAM roles or organizational units.
+        RoleArn: arn:aws:iam::123456789012:role/ServiceCatalogLaunchRole
