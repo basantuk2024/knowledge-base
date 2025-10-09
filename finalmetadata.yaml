@@ -1,0 +1,34 @@
+# metadata.yaml - AWS Service Catalog Product Metadata
+
+product:
+  name: CrossAccountAssumeRole
+  owner: "Data Platform Team"
+  description: >
+    AWS Service Catalog Product to configure cross-account IAM roles 
+    between an EKS cluster (Account A) and target account (Account B) 
+    for controlled S3 access using IRSA.
+  distributor: "YourCompany"
+  supportDescription: "Contact Data Platform Team for issues"
+  supportEmail: "data-platform-support@yourcompany.com"
+  supportUrl: "https://wiki.yourcompany.com/DataPlatform/ServiceCatalog"
+
+type: CLOUD_FORMATION_TEMPLATE
+
+source:
+  templateFile: product.yaml
+
+versions:
+  - name: "v1.0.0"
+    description: "Initial release with cross-account role setup for EKS and S3 access."
+    templateFile: product.yaml
+    replace: false
+    # Optional: set a unique version identifier for automated pipelines
+    versionCode: "2025-10-09-001"
+
+tags:
+  - key: Environment
+    value: sandbox
+  - key: Project
+    value: Airflow-CrossAccount-Access
+  - key: CostCenter
+    value: DataPlatform
