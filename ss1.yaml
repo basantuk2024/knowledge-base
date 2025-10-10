@@ -1,0 +1,323 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS Service Catalog Product - CrossAccountAssumeRole
+  Configures cross-account IAM roles between an EKS cluster (Account A)
+  and target account (Account B) for controlled S3 access using IRSA or Pod Identity.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: 'Account Configuration'
+        Parameters:
+          - SourceAccountId
+          - TargetAccountId
+          - AWSRegion
+      - Label:
+          default: 'EKS Cluster Configuration'
+        Parameters:
+          - EKSClusterName
+          - KubernetesNamespace
+          - ServiceAccountName
+      - Label:
+          default: 'IAM Role Configuration'
+        Parameters:
+          - RoleAName
+          - RoleBName
+          - PolicyAName
+          - PolicyBName
+          - PermissionsBoundaryArn
+      - Label:
+          default: 'S3 Access Configuration'
+        Parameters:
+          - S3BucketPrefix
+          - EnableFullS3Access
+      - Label:
+          default: 'Tagging and Metadata'
+        Parameters:
+          - Environment
+          - ProjectName
+          - CostCenter
+    ParameterLabels:
+      SourceAccountId:
+        default: 'Source AWS Account ID (Account A - EKS)'
+      TargetAccountId:
+        default: 'Target AWS Account ID (Account B - S3)'
+      AWSRegion:
+        default: 'AWS Region'
+      EKSClusterName:
+        default: 'EKS Cluster Name'
+      KubernetesNamespace:
+        default: 'Kubernetes Namespace'
+      ServiceAccountName:
+        default: 'Kubernetes Service Account Name'
+      PermissionsBoundaryArn:
+        default: 'Optional IAM Permissions Boundary ARN'
+
+Parameters:
+  # Account Configuration
+  SourceAccountId:
+    Type: String
+    Description: 'AWS Account ID where the EKS cluster is running (Account A)'
+    AllowedPattern: '^\d{12}$'
+
+  TargetAccountId:
+    Type: String
+    Description: 'AWS Account ID containing S3 resources (Account B)'
+    AllowedPattern: '^\d{12}$'
+
+  AWSRegion:
+    Type: String
+    Description: 'AWS Region for resources'
+    Default: 'eu-west-1'
+    AllowedValues:
+      - eu-west-1
+      - eu-west-2
+      - eu-central-1
+      - us-east-1
+      - us-east-2
+      - us-west-1
+      - us-west-2
+      - ap-southeast-1
+      - ap-southeast-2
+      - ap-northeast-1
+
+  # EKS Configuration
+  EKSClusterName:
+    Type: String
+    Description: 'Name of the EKS cluster in Account A'
+    MinLength: 1
+    MaxLength: 100
+
+  KubernetesNamespace:
+    Type: String
+    Description: 'Kubernetes namespace where the service account exists'
+    Default: 'airflow'
+
+  ServiceAccountName:
+    Type: String
+    Description: 'Kubernetes service account name for Airflow workers'
+    Default: 'airflow-worker'
+
+  # IAM Role Configuration
+  RoleAName:
+    Type: String
+    Default: 'AirflowPodIdentityRole'
+    Description: 'Base name for Pod Identity Role (svc- prefix applied automatically)'
+
+  RoleBName:
+    Type: String
+    Default: 'AirflowCrossAccountTargetRole'
+    Description: 'Base name for Target Role (svc- prefix applied automatically)'
+
+  PolicyAName:
+    Type: String
+    Default: 'AirflowAssumeRoleBPolicy'
+
+  PolicyBName:
+    Type: String
+    Default: 'AirflowS3AccessPolicy'
+
+  PermissionsBoundaryArn:
+    Type: String
+    Description: >
+      Optional ARN of the IAM Permissions Boundary to attach to created roles.
+      If left empty, defaults to arn:aws:iam::<account-id>:policy/svc-global-permissions-boundary.
+    Default: ''
+
+  # S3 Configuration
+  S3BucketPrefix:
+    Type: String
+    Default: 'airflow'
+
+  EnableFullS3Access:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  # Tagging
+  Environment:
+    Type: String
+    Default: 'sandbox'
+    AllowedValues: ['sandbox', 'development', 'staging', 'production']
+
+  ProjectName:
+    Type: String
+    Default: 'Airflow-CrossAccount-Access'
+
+  CostCenter:
+    Type: String
+    Default: 'DataPlatform'
+
+Conditions:
+  IsSourceAccount: !Equals [!Ref 'AWS::AccountId', !Ref SourceAccountId]
+  IsTargetAccount: !Equals [!Ref 'AWS::AccountId', !Ref TargetAccountId]
+  UseFullS3Access: !Equals [!Ref EnableFullS3Access, 'true']
+  UseRestrictedS3Access: !Not [!Condition UseFullS3Access]
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+
+Resources:
+  # ========================================================================
+  # ACCOUNT A RESOURCES (Source Account - EKS)
+  # ========================================================================
+
+  PodIdentityRole:
+    Type: AWS::IAM::Role
+    Condition: IsSourceAccount
+    Properties:
+      RoleName: !Sub "svc-${RoleAName}"
+      PermissionsBoundary: !If
+        - HasPermissionsBoundary
+        - !Ref PermissionsBoundaryArn
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:policy/svc-global-permissions-boundary'
+      Description: !Sub 'Pod identity role for ${ServiceAccountName} in ${KubernetesNamespace}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EKSPodIdentityTrust
+            Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+              - 'sts:TagSession'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref SourceAccountId
+
+          - Sid: EKSServiceAccountFederation
+            Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:aws:iam::${SourceAccountId}:oidc-provider/oidc.eks.${AWSRegion}.amazonaws.com/id/${EKSClusterName}'
+            Action: 'sts:AssumeRoleWithWebIdentity'
+            Condition:
+              StringEquals:
+                Fn::Sub: |
+                  {
+                    "oidc.eks.${AWSRegion}.amazonaws.com/id/${EKSClusterName}:sub": "system:serviceaccount:${KubernetesNamespace}:${ServiceAccountName}",
+                    "oidc.eks.${AWSRegion}.amazonaws.com/id/${EKSClusterName}:aud": "sts.amazonaws.com"
+                  }
+      MaxSessionDuration: 3600
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: ServiceCatalog
+
+  AssumeRoleBPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: IsSourceAccount
+    Properties:
+      ManagedPolicyName: !Sub '${PolicyAName}-${Environment}'
+      Description: !Sub 'Policy allowing svc-${RoleAName} to assume svc-${RoleBName} in Account ${TargetAccountId}'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AssumeTargetAccountRole
+            Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Resource: !Sub 'arn:aws:iam::${TargetAccountId}:role/svc-${RoleBName}'
+      Roles:
+        - !Ref PodIdentityRole
+
+  # ========================================================================
+  # ACCOUNT B RESOURCES (Target Account - S3)
+  # ========================================================================
+
+  TargetAccountRole:
+    Type: AWS::IAM::Role
+    Condition: IsTargetAccount
+    Properties:
+      RoleName: !Sub "svc-${RoleBName}"
+      PermissionsBoundary: !If
+        - HasPermissionsBoundary
+        - !Ref PermissionsBoundaryArn
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:policy/svc-global-permissions-boundary'
+      Description: !Sub 'Target role for cross-account access from svc-${RoleAName} in ${SourceAccountId}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CrossAccountTrustFromRoleA
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${SourceAccountId}:role/svc-${RoleAName}'
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'sts:ExternalId': !Sub '${AWS::Region}/${SourceAccountId}/${EKSClusterName}/${KubernetesNamespace}/${ServiceAccountName}'
+      MaxSessionDuration: 3600
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: ServiceCatalog
+
+  S3AccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: IsTargetAccount
+    Properties:
+      ManagedPolicyName: !Sub '${PolicyBName}-${Environment}'
+      Description: !Sub 'S3 access policy for svc-${RoleBName}'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - !If
+            - UseFullS3Access
+            -
+              Sid: FullS3Access
+              Effect: Allow
+              Action: 's3:*'
+              Resource:
+                - 'arn:aws:s3:::*'
+                - 'arn:aws:s3:::*/*'
+            - !Ref 'AWS::NoValue'
+          - !If
+            - UseRestrictedS3Access
+            -
+              Sid: RestrictedAccess
+              Effect: Allow
+              Action:
+                - 's3:GetObject'
+                - 's3:PutObject'
+                - 's3:ListBucket'
+              Resource:
+                - !Sub 'arn:aws:s3:::${S3BucketPrefix}*'
+                - !Sub 'arn:aws:s3:::${S3BucketPrefix}*/*'
+            - !Ref 'AWS::NoValue'
+      Roles:
+        - !Ref TargetAccountRole
+
+Outputs:
+  PodIdentityRoleArn:
+    Description: 'ARN of Role A (EKS Pod Identity)'
+    Value: !If
+      - IsSourceAccount
+      - !GetAtt PodIdentityRole.Arn
+      - !Sub 'arn:aws:iam::${SourceAccountId}:role/svc-${RoleAName}'
+
+  TargetAccountRoleArn:
+    Description: 'ARN of Role B (Target Account S3 Access)'
+    Value: !If
+      - IsTargetAccount
+      - !GetAtt TargetAccountRole.Arn
+      - !Sub 'arn:aws:iam::${TargetAccountId}:role/svc-${RoleBName}'
+
+  S3AccessPolicyArn:
+    Description: 'ARN of S3 access policy attached to Role B'
+    Value: !If
+      - IsTargetAccount
+      - !Ref S3AccessPolicy
+      - !Sub 'arn:aws:iam::${TargetAccountId}:policy/${PolicyBName}'
+
+  ExternalId:
+    Description: 'External ID used in trust policy for additional security'
+    Value: !Sub '${AWS::Region}/${SourceAccountId}/${EKSClusterName}/${KubernetesNamespace}/${ServiceAccountName}'
